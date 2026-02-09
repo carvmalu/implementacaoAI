@@ -41,7 +41,7 @@ class LandmarkDetection:
             landmarks['right_eye'] = vertices[right_mask][right_eye_idx]
         return landmarks
     
-    def save_landmarks(self, landmarks, output):
+    def save_landmarks(self, landmarks, output_path):
         'salva landmarks para visualização'
         import json
 
