@@ -1,120 +1,99 @@
 import numpy as np
-import trimesh 
-from scipy.spatial.transform import rotation
-from scipy.linalg import orthogonal_procrustes
-import networkx as nx
+import trimesh
 
-class RigidAligner:
-    '''Alinhamento rígido usando Transformation Sychronization'''
-
-    def pairwise_procrustes(self, source_points, target_points):
-        '''
-        Procrustes entre dois conjuntos de pontos
-        Return: R (rotação), t (translação)
-        '''
-        # centraliza 
+class EducationalAligner:
+    """
+    Alinhamento rígido baseado em landmarks
+    Usa Procrustes (SVD) - método correto segundo o artigo
+    """
+    
+    def __init__(self):
+        self.use_scale = False  # Artigo não usa escala
+        
+    def procrustes_analysis(self, source_points, target_points):
+        """
+        Procrustes analysis com SVD
+        Args:
+            source_points: (N,3) - pontos da malha fonte
+            target_points: (N,3) - pontos do template
+        Returns:
+            R: (3,3) - matriz de rotação
+            t: (3,) - vetor de translação
+        """
+        # 1. Centraliza os pontos
         source_mean = np.mean(source_points, axis=0)
         target_mean = np.mean(target_points, axis=0)
-
+        
         source_centered = source_points - source_mean
         target_centered = target_points - target_mean
-
-        # SVD para rotação ótima
+        
+        # 2. SVD para rotação ótima
         H = source_centered.T @ target_centered
         U, _, Vt = np.linalg.svd(H)
         R = Vt.T @ U.T
-
-        # corrige reflexão se necessário
+        
+        # 3. Corrige reflexão (garante rotação própria)
         if np.linalg.det(R) < 0:
             Vt[-1, :] *= -1
             R = Vt.T @ U.T
         
-        # translação
+        # 4. Translação
         t = target_mean - R @ source_mean
-        return R, t
-    def transformation_synchronization(self, pairwise_transforms):
-        '''
-        Transformation synchronization [2,3]
-        encontra transformações consistentes globalmente 
-        '''
-        n = len(pairwise_transforms)
-
-        # constrói matriz de rotações 3n x 3n
-        R_block = np.zeros((3*n, 3*n))
-
-        for i in range(n):
-            for j in range(n):
-                if i != j and pairwise_transforms[i][j] is not None:
-                    R_ij, _ = pairwise_transforms[i][j]
-                    R_block[3*i:3*1+3,3*j:3*j+3]
         
-        # SVD para encontrar rotações absolutas
-        U, _, _ = np.linalg.svd(R_block)
-        R_absolute = U[:, :3]
-
-        return R_absolute
+        return R, t
     
-    def align_all_meshes(self, meshes, all_landmarks):
-        '''
-        Alinha TODAS as malhas simultaneamente usando transformation synchronization
-        '''
-        n = len(meshes)
-
-        # 1. calcula transformações par a par
-        pairwise_transforms = [[None] * n for _ in range(n)]
-
-        for i in range(n):
-            for j in range(n):
-                if i != j:
-                    # extrai landmarks correspondentes
-                    source_landmarks = np.array(list(all_landmarks[i].values()))
-                    target_landmarks = np.array(list(all_landmarks[j].values()))
-
-                    # calcula transformação i -> j
-                    R_ij, t_ij = self.pairwise_procrustes(source_landmarks, target_landmarks)
-                    pairwise_transforms[i][j] = (R_ij, t_ij)
-
-            # 2. transformation synchronization
-            R_absolute = self.transformation_synchronization(pairwise_transforms)
-
-            # 3. aplica transformações absolutas
-            aligned_meshes = []
-            for i in range(n):
-                # extrai a rotação absoluta para este scan
-                R_i = R_absolute[3*i: 3*i + 3,:3]
-
-                # para translação usa media das translações relativas
-                translations = []
-                for j in range(n):
-                    if i != j and pairwise_transforms[i][j] is not None:
-                        _,  t_ij = pairwise_transforms[i][j]
-                        translations.append(t_ij)
-                t_i = np.mean(translations, axis =0) if translations else np.zeros(3)
-
-                # aplica transformações
-                vertices = meshes[i].vertices
-                aligned_vertices = vertices @ R_i.T + t_i
-                aligned_mesh =  trimesh.Trimesh(vertices = aligned_vertices, faces = meshes[i].faces)
-                aligned_meshes.append(aligned_mesh)
-
-        return aligned_meshes
-    def alignt_to_mean_shape(self, mesh, landmarks, mean_landmarks):
-        '''
-        Versãp simplificada: alinha uma malha a uma forma média
-        '''
-        # converte landmarks para arrays
-        source_points = np.array(list(landmarks.values()))
-        target_points = np.array(list(mean_landmarks.values()))
-
-        # procurustes direto
-        R, t = self.pairwise_procrustes(source_points, target_points)
-
-        # aplica
-        aligned_vertices = mesh.vertices @ R.T + t
-
-        return trimesh.Trimesh(vertices = aligned_vertices, faces= mesh.faces)
+    def align_to_template(self, mesh, landmarks, template_landmarks):
+        """
+        Alinha malha ao template usando landmarks correspondentes
+        """
+        # 1. Extrai pontos correspondentes (apenas landmarks comuns)
+        common_points = []
+        source_pts = []
+        target_pts = []
+        
+        for name in template_landmarks.keys():
+            if name in landmarks:
+                common_points.append(name)
+                source_pts.append(landmarks[name])
+                target_pts.append(template_landmarks[name])
+        
+        if len(common_points) < 3:
+            print(f"  ⚠️ Apenas {len(common_points)} landmarks comuns, insuficiente para alinhamento")
+            return mesh
+        
+        source_pts = np.array(source_pts)
+        target_pts = np.array(target_pts)
+        
+        # 2. Calcula transformação
+        R, t = self.procrustes_analysis(source_pts, target_pts)
+        
+        # 3. Aplica a todos os vértices
+        vertices = mesh.vertices
+        aligned_vertices = vertices @ R.T + t
+        
+        # 4. Atualiza landmarks
+        aligned_landmarks = {}
+        for name, pt in landmarks.items():
+            aligned_landmarks[name] = pt @ R.T + t
+        
+        aligned_mesh = trimesh.Trimesh(
+            vertices=aligned_vertices,
+            faces=mesh.faces.copy()
+        )
+        
+        print(f"  ✓ Alinhamento concluído: rotação R, translação t")
+        print(f"    - Landmarks usados: {len(common_points)}")
+        print(f"    - RMSE: {np.sqrt(np.mean(np.linalg.norm(source_pts @ R.T + t - target_pts, axis=1)**2)):.4f}")
+        
+        return aligned_mesh, aligned_landmarks
     
-
-
-
-
+    def simple_pipeline(self, mesh, landmarks, template_landmarks):
+        """Pipeline simplificado de alinhamento"""
+        print("\n[RIGID ALIGNMENT]")
+        print("=" * 40)
+        
+        aligned_mesh, aligned_landmarks = self.align_to_template(
+            mesh, landmarks, template_landmarks
+        )
+        
+        return aligned_mesh, aligned_landmarks
