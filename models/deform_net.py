@@ -27,7 +27,7 @@ z_geo = (z_geoId, z_geoEx, z_geoH)
 from tkinter import NO
 import torch
 import torch.nn as nn
-import torch.nn.funcitional as F
+import torch.nn.functional as F
 import numpy as np
 from models.ref_net import PositionalEnconding
 
